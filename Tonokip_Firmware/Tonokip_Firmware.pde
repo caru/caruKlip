@@ -52,8 +52,8 @@ bool direction_x, direction_y, direction_z, direction_e;
 unsigned long previous_micros=0, previous_micros_x=0, previous_micros_y=0, previous_micros_z=0, previous_micros_e=0, previous_millis_heater, previous_millis_bed_heater;
 unsigned long x_steps_to_take, y_steps_to_take, z_steps_to_take, e_steps_to_take;
 unsigned long long_full_velocity_units = full_velocity_units * 100;
-unsigned long max_x_interval = 1000000.0 / (min_units_per_second * x_steps_per_unit);
-unsigned long max_y_interval = 1000000.0 / (min_units_per_second * y_steps_per_unit);
+unsigned long max_x_interval = 100000000.0 / (min_units_per_second * x_steps_per_unit);
+unsigned long max_y_interval = 100000000.0 / (min_units_per_second * y_steps_per_unit);
 unsigned long max_interval;
 boolean acceleration_enabled;
 float destination_x =0.0, destination_y = 0.0, destination_z = 0.0, destination_e = 0.0;
@@ -436,10 +436,10 @@ inline void process_commands()
         time_for_move = max(time_for_move,Z_TIME_FOR_MOVE);
         if(time_for_move <= 0) time_for_move = max(time_for_move,E_TIME_FOR_MOVE);
 
-        if(x_steps_to_take) x_interval = time_for_move/x_steps_to_take;
-        if(y_steps_to_take) y_interval = time_for_move/y_steps_to_take;
-        if(z_steps_to_take) z_interval = time_for_move/z_steps_to_take;
-        if(e_steps_to_take && (x_steps_to_take + y_steps_to_take <= 0)) e_interval = time_for_move/e_steps_to_take;
+        if(x_steps_to_take) x_interval = time_for_move/x_steps_to_take*100;
+        if(y_steps_to_take) y_interval = time_for_move/y_steps_to_take*100;
+        if(z_steps_to_take) z_interval = time_for_move/z_steps_to_take*100;
+        if(e_steps_to_take && (x_steps_to_take + y_steps_to_take <= 0)) e_interval = time_for_move/e_steps_to_take*100;
         
         //#define DEBUGGING false
 	#if 0        
@@ -820,6 +820,11 @@ void linear_move(unsigned long x_steps_remaining, unsigned long y_steps_remainin
   if(interval > max_interval) acceleration_enabled = false;
   unsigned long steps_done = 0;
   unsigned int steps_acceleration_check = 1;
+
+  //Define intervals errors
+  int error_interval = 0;
+  int z_error_interval = 0;
+  int e_error_interval = 0;
   
   //move until no more steps remain 
   while(x_steps_remaining + y_steps_remaining + z_steps_remaining + e_steps_remaining > 0) {
@@ -850,10 +855,21 @@ void linear_move(unsigned long x_steps_remaining, unsigned long y_steps_remainin
       if(Y_MAX_PIN > -1) if(direction_y) if(digitalRead(Y_MAX_PIN) != ENDSTOPS_INVERTING) break;
       if(steep_y) {
         timediff = micros() - previous_micros_y;
-        while(timediff >= interval && y_steps_remaining>0) {
+        error_interval+=interval%100;
+        if(error_interval>100) {
+          error_interval-=100;
+          timediff-=1;
+        }
+        while(timediff >= interval / 1000 && y_steps_remaining>0) {
           steps_done++;
           steps_remaining--;
-          y_steps_remaining--; timediff-=interval;
+          y_steps_remaining--;
+          timediff-=interval / 100;
+          error_interval+=interval%100;
+          if(error_interval>100) {
+            error_interval-=100;
+            timediff-=1;
+          }
           error_x = error_x - delta_x;
           do_y_step();
           if(error_x < 0) {
@@ -863,10 +879,21 @@ void linear_move(unsigned long x_steps_remaining, unsigned long y_steps_remainin
         }
       } else if (steep_x) {
         timediff=micros() - previous_micros_x;
-        while(timediff >= interval && x_steps_remaining>0) {
+        error_interval+=interval%100;
+        if(error_interval>100) {
+          error_interval-=100;
+          timediff-=1;
+        }
+        while(timediff >= interval / 1000 && x_steps_remaining>0) {
           steps_done++;
           steps_remaining--;
-          x_steps_remaining--; timediff-=interval;
+          x_steps_remaining--;
+          timediff-=interval / 100;
+          error_interval+=interval%100;
+          if(error_interval>100) {
+            error_interval-=100;
+            timediff-=1;
+          }
           error_y = error_y - delta_y;
           do_x_step();
           if(error_y < 0) { 
@@ -882,12 +909,33 @@ void linear_move(unsigned long x_steps_remaining, unsigned long y_steps_remainin
       if(Z_MIN_PIN > -1) if(!direction_z) if(digitalRead(Z_MIN_PIN) != ENDSTOPS_INVERTING) break;
       if(Z_MAX_PIN > -1) if(direction_z) if(digitalRead(Z_MAX_PIN) != ENDSTOPS_INVERTING) break;
       timediff=micros()-previous_micros_z;
-      while(timediff >= z_interval && z_steps_remaining) { do_z_step(); z_steps_remaining--; timediff-=z_interval;}
+      z_error_interval+=z_interval%100;
+      if(z_error_interval>100) {
+        z_error_interval-=100;
+        timediff-=1;
+      }
+      while(timediff >= z_interval/1000 && z_steps_remaining) { 
+        do_z_step();
+        z_steps_remaining--;
+        timediff-=z_interval/100;
+        z_error_interval+=z_interval%100;
+        if(z_error_interval>100) {
+          z_error_interval-=100;
+          timediff-=1;
+        }
+      }
     }
 
     //If there are e steps remaining, check if e steps must be taken
     if(e_steps_remaining){
-      if (x_steps_to_take + y_steps_to_take <= 0) timediff=micros()-previous_micros_e;
+      if (x_steps_to_take + y_steps_to_take <= 0) {
+        timediff=micros()-previous_micros_e;
+        e_error_interval+=e_interval%100;
+        if(e_error_interval>100) {
+          e_error_interval-=100;
+          timediff-=1;
+        }
+      }
       unsigned int final_e_steps_remaining = 0;
       if (steep_x && x_steps_to_take > 0) final_e_steps_remaining = e_steps_to_take * x_steps_remaining / x_steps_to_take;
       else if (steep_y && y_steps_to_take > 0) final_e_steps_remaining = e_steps_to_take * y_steps_remaining / y_steps_to_take;
@@ -895,7 +943,16 @@ void linear_move(unsigned long x_steps_remaining, unsigned long y_steps_remainin
       if (final_e_steps_remaining > 0)  while(e_steps_remaining > final_e_steps_remaining) { do_e_step(); e_steps_remaining--;}
       else if (x_steps_to_take + y_steps_to_take > 0)  while(e_steps_remaining) { do_e_step(); e_steps_remaining--;}
       //Else, normally check if e steps must be taken
-      else while (timediff >= e_interval && e_steps_remaining) { do_e_step(); e_steps_remaining--; timediff-=e_interval;}
+      else while (timediff >= e_interval / 1000 && e_steps_remaining) {
+        do_e_step();
+        e_steps_remaining--;
+        timediff-=e_interval/100;
+        e_error_interval+=e_interval%100;
+        if(e_error_interval>100) {
+          e_error_interval-=100;
+          timediff-=1;
+        }
+      }
     }
     
     //If more that half second is passed since previous heating check, manage it
